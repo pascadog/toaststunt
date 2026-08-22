@@ -189,9 +189,9 @@ bf_add_verb(Var arglist, Byte next, void *vdata, Objid progr)
         ; /* already failed */
     else if ((e = validate_verb_args(args, &dobj, &prep, &iobj)) != E_NONE)
         free_str(names);
-    else if (!obj.is_obj()) {
+    else if (!obj.is_object()) {
         free_str(names);
-        e = E_TYPE;
+        e = E_INVARG;
     } else if (!is_valid(obj)) {
         free_str(names);
         e = E_INVARG;
@@ -246,7 +246,7 @@ bf_delete_verb(Var arglist, Byte next, void *vdata, Objid progr)
 
     if ((e = validate_verb_descriptor(desc)) != E_NONE)
         ; /* e is already set */
-    else if (!obj.is_obj())
+    else if (!obj.is_object())
         e = E_TYPE;
     else if (!is_valid(obj))
         e = E_INVARG;
@@ -331,7 +331,7 @@ bf_set_verb_info(Var arglist, Byte next, void *vdata, Objid progr)
 
     if ((e = validate_verb_descriptor(desc)) != E_NONE)
         ; /* e is already set */
-    else if (!obj.is_obj())
+    else if (!obj.is_object())
         e = E_TYPE;
     else if (!is_valid(obj))
         e = E_INVARG;
@@ -389,7 +389,7 @@ bf_verb_args(Var arglist, Byte next, void *vdata, Objid progr)
     Var r;
     enum error e;
 
-    if (!obj.is_obj()) {
+    if (!obj.is_object()) {
         free_var(arglist);
         return make_error_pack(E_TYPE);
     } if ((e = validate_verb_descriptor(desc)) != E_NONE
@@ -430,7 +430,7 @@ bf_set_verb_args(Var arglist, Byte next, void *vdata, Objid progr)
 
     if ((e = validate_verb_descriptor(desc)) != E_NONE)
         ; /* e is already set */
-    else if (!obj.is_obj())
+    else if (!obj.is_object())
         e = E_TYPE;
     else if (!is_valid(obj))
         e = E_INVARG;
@@ -517,7 +517,7 @@ bf_set_verb_code(Var arglist, Byte next, void *vdata, Objid progr)
             free_var(arglist);
             return make_error_pack(E_TYPE);
         }
-    if (!obj.is_obj()) {
+    if (!obj.is_object()) {
         free_var(arglist);
         return make_error_pack(E_TYPE);
     } else if ((e = validate_verb_descriptor(desc)) != E_NONE
@@ -652,6 +652,50 @@ bf_eval(Var arglist, Byte next, void *data, Objid progr)
     return p;
 }
 
+static package
+bf_call_verb(Var arglist, Byte next, void *data, Objid progr)
+{
+    if (next == 1) {
+        int nargs = arglist.v.list[0].v.num;
+
+        if (!is_wizard(progr)) {
+            free_var(arglist);
+            return make_error_pack(E_PERM);
+        }
+
+        Objid obj        = arglist.v.list[1].v.obj;
+        const char *verb = arglist.v.list[2].v.str;
+        Var args         = var_ref(arglist.v.list[3]);
+
+        Var this_val;
+        if (nargs >= 4) {
+            this_val = var_ref(arglist.v.list[4]);
+        } else {
+            this_val.type = TYPE_OBJ;
+            this_val.v.obj = obj;
+        }
+
+        free_var(arglist);
+
+        if (!valid(obj)) {
+            free_var(args);
+            free_var(this_val);
+            return make_error_pack(E_INVARG);
+        }
+
+        enum error e = call_verb(obj, verb, this_val, args, 0);
+
+        if (e == E_NONE)
+            return make_call_pack(2, nullptr);
+        else
+            return make_error_pack(e);
+
+    } else {
+        /* next == 2: the called verb has returned; arglist is its return value */
+        return make_var_pack(var_ref(arglist));
+    }
+}
+
 void
 register_verbs(void)
 {
@@ -676,4 +720,6 @@ register_verbs(void)
     register_function("respond_to", 2, 2, bf_respond_to,
                       TYPE_ANY, TYPE_STR);
     register_function("eval", 1, -1, bf_eval, TYPE_STR);
+	register_function("call_verb", 3, 4, bf_call_verb,
+                  TYPE_OBJ, TYPE_STR, TYPE_LIST, TYPE_OBJ);
 }
