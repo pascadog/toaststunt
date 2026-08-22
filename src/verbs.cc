@@ -698,6 +698,80 @@ bf_call_verb(Var arglist, Byte next, void *data, Objid progr)
     }
 }
 
+
+static bool
+valid_rgb_list(Var v)
+{
+    if (v.type != TYPE_LIST || listlength(v) != 3)
+        return false;
+    for (int i = 1; i <= 3; i++) {
+        if (v.v.list[i].type != TYPE_INT)
+            return false;
+    }
+    return true;
+}
+
+static bool
+valid_light_entry(Var v)
+{
+    if (v.type != TYPE_LIST || listlength(v) != 4)
+        return false;
+    for (int i = 1; i <= 4; i++) {
+        if (v.v.list[i].type != TYPE_INT && v.v.list[i].type != TYPE_FLOAT)
+            return false;
+    }
+    return true;
+}
+
+static bool
+valid_lights_list(Var v)
+{
+    if (v.type != TYPE_LIST)
+        return false;
+    int n = listlength(v);
+    for (int i = 1; i <= n; i++) {
+        if (!valid_light_entry(v.v.list[i]))
+            return false;
+    }
+    return true;
+}
+
+static bool
+valid_decos_list(Var v)
+{
+    if (v.type != TYPE_LIST)
+        return false;
+    int n = listlength(v);
+    for (int i = 1; i <= n; i++) {
+        if (v.v.list[i].type != TYPE_INT)
+            return false;
+    }
+    return true;
+}
+
+static bool
+valid_chunk(Var v)
+{
+    return v.type == TYPE_LIST && listlength(v) == 4
+        && valid_rgb_list(v.v.list[1])
+        && valid_rgb_list(v.v.list[2])
+        && valid_decos_list(v.v.list[3])
+        && v.v.list[4].type == TYPE_STR;
+}
+
+static bool
+valid_chunks_list(Var v)
+{
+    if (v.type != TYPE_LIST)
+        return false;
+    int n = listlength(v);
+    for (int i = 1; i <= n; i++) {
+        if (!valid_chunk(v.v.list[i]))
+            return false;
+    }
+    return true;
+}
+
 static Var
 apply_lighting_native(Var base, Var ambient, Var lights, int realistic)
 {
@@ -767,6 +841,11 @@ bf_tint_string(Var arglist, Byte next, void *vdata, Objid progr)
     Var ambient = arglist.v.list[2];
     Var lights = arglist.v.list[3];
     int realistic = (arglist.v.list[0].v.num >= 4) ? arglist.v.list[4].v.num : 0;
+
+    if (!valid_chunks_list(chunks) || !valid_rgb_list(ambient) || !valid_lights_list(lights)) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    }
 
     std::string out;
     int nchunks = listlength(chunks);
