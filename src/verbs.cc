@@ -18,6 +18,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "config.h"
 #include "db.h"
