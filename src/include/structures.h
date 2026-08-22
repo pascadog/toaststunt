@@ -61,6 +61,7 @@ typedef Num Objid;
 #define NOTHING		-1
 #define AMBIGUOUS	-2
 #define FAILED_MATCH	-3
+#define ROOT_CLASS      1
 
 /* Do not reorder or otherwise modify this list, except to add new elements at
  * the end, since the order here defines the numeric equivalents of the error

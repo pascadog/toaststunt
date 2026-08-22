@@ -213,6 +213,9 @@ extern Var db_object_children(Objid);
 				 * Thus, the caller should var_ref() the value
 				 * if the reference is to be persistent.
 				 */
+extern Objid db_first_child(Objid);
+extern Objid db_last_child(Objid); 
+				
 
 extern int db_next_child(Objid oid, Var *ret);
 				/* A replacement for db_for_all_children that
@@ -247,6 +250,9 @@ extern int db_for_all_contents(Objid,
 				 *      db_renumber_object()
 				 *      db_change_location()
 				 */
+extern Objid db_first_contents(Objid);
+extern Objid db_last_contents(Objid);
+
 extern void db_change_location(Objid oid, Objid location, int position);
 
 typedef enum {
@@ -308,6 +314,8 @@ extern Var db_all_users(void);
 
 extern int db_object_isa(Var, Var);
 
+extern int is_in(Objid, Objid);
+extern int is_in_a(Objid, Objid);
 
 /**** properties *****/
 

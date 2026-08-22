@@ -988,6 +988,44 @@ db_object_children(Objid oid)
     return dbpriv_object_children(objects[oid]);
 }
 
+Objid
+db_first_child(Objid oid)
+{
+    Var children = objects[oid]->children;
+    if (listlength(children) < 1)
+        return NOTHING;
+    return children.v.list[1].v.obj;
+}
+
+Objid
+db_last_child(Objid oid)
+{
+    Var children = objects[oid]->children;
+    int len = listlength(children);
+    if (len < 1)
+        return NOTHING;
+    return children.v.list[len].v.obj;
+}
+
+Objid
+db_first_contents(Objid oid)
+{
+    Var contents = objects[oid]->contents;
+    if (listlength(contents) < 1)
+        return NOTHING;
+    return contents.v.list[1].v.obj;
+}
+
+Objid
+db_last_contents(Objid oid)
+{
+    Var contents = objects[oid]->contents;
+    int len = listlength(contents);
+    if (len < 1)
+        return NOTHING;
+    return contents.v.list[len].v.obj;
+}
+
 int
 db_next_child(Objid oid, Var *ret)
 {
@@ -1400,6 +1438,44 @@ db_object_isa(Var object, Var parent)
 
     return found;
 }
+
+int
+is_in(Objid oid_what, Objid oid_where)
+{
+    if (!valid(oid_what))
+        return 0;
+    Objid loc = db_object_location(oid_what);
+
+    if (oid_where == NOTHING || !valid(oid_where))
+        return 0;
+
+    while (valid(loc)) {
+        if (loc == oid_where)
+            return 1;
+        loc = db_object_location(loc);
+    }
+    return 0;
+}
+
+int
+is_in_a(Objid oid_what, Objid oid_type_of_location)
+{
+    if (!valid(oid_what))
+        return 0;
+    Objid loc = db_object_location(oid_what);
+
+    if (oid_type_of_location == NOTHING || !valid(oid_type_of_location))
+        return 0;
+
+    Var type_var = Var::new_obj(oid_type_of_location);
+    while (valid(loc)) {
+        if (db_object_isa(Var::new_obj(loc), type_var))
+            return 1;
+        loc = db_object_location(loc);
+    }
+    return 0;
+}
+
 
 void do_fixup_owners(Object *o, const Objid obj)
 {

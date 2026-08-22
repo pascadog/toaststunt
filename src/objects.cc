@@ -755,6 +755,164 @@ bf_descendants(Var arglist, Byte next, void *vdata, Objid progr)
     }
 }
 
+static package
+bf_gamevalid(Var arglist, Byte next, void *vdata, Objid progr)
+{                               /* (object) */
+    static Objid tomb = NOTHING;
+    if (!valid(tomb))
+        tomb = NOTHING;
+    if (tomb == NOTHING) {
+        Var p;
+        if (valid(SYSTEM_OBJECT)
+            && db_find_property(Var::new_obj(SYSTEM_OBJECT), "tomb", &p).ptr
+            && (p.type == TYPE_OBJ) && valid(p.v.obj)
+        ) {
+            tomb = p.v.obj;
+        } else {
+            free_var(arglist);
+            return make_var_pack(zero);
+        }
+    }
+    Var r;
+    r.type = TYPE_INT;
+    Objid o = arglist.v.list[1].v.obj;
+    r.v.num = valid(o) && db_object_isa(Var::new_obj(o), Var::new_obj(ROOT_CLASS)) && !is_in(o, tomb);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_area(Var arglist, Byte next, void *vdata, Objid progr)
+{                               /* (object) */
+    static Objid g_area = NOTHING;
+    Var result;
+    result.type = TYPE_OBJ;
+    if (!valid(g_area))
+        g_area = NOTHING;
+    if (g_area == NOTHING) {
+        Var p;
+        if (valid(SYSTEM_OBJECT)
+            && db_find_property(Var::new_obj(SYSTEM_OBJECT), "area", &p).ptr
+            && (p.type == TYPE_OBJ) && valid(p.v.obj)
+        ) {
+            g_area = p.v.obj;
+        } else {
+            free_var(arglist);
+            result.v.obj = NOTHING;
+            return make_var_pack(result);
+        }
+    }
+    Objid o = arglist.v.list[1].v.obj;
+    Objid loc = o;
+    free_var(arglist);
+    Var area_var = Var::new_obj(g_area);
+    while (valid(loc)) {
+        if (db_object_isa(Var::new_obj(loc), area_var)) {
+            result.v.obj = loc;
+            return make_var_pack(result);
+        }
+        loc = db_object_location(loc);
+    }
+    result.v.obj = NOTHING;
+    return make_var_pack(result);
+}
+
+static package
+bf_region(Var arglist, Byte next, void *vdata, Objid progr)
+{                               /* (object) */
+    static Objid g_region = NOTHING;
+    Var result;
+    result.type = TYPE_OBJ;
+    if (!valid(g_region))
+        g_region = NOTHING;
+    if (g_region == NOTHING) {
+        Var p;
+        if (valid(SYSTEM_OBJECT)
+            && db_find_property(Var::new_obj(SYSTEM_OBJECT), "region", &p).ptr
+            && (p.type == TYPE_OBJ) && valid(p.v.obj)
+        ) {
+            g_region = p.v.obj;
+        } else {
+            free_var(arglist);
+            result.v.obj = NOTHING;
+            return make_var_pack(result);
+        }
+    }
+    Objid o = arglist.v.list[1].v.obj;
+    Objid loc = o;
+    free_var(arglist);
+    Var region_var = Var::new_obj(g_region);
+    while (valid(loc)) {
+        if (db_object_isa(Var::new_obj(loc), region_var)) {
+            result.v.obj = loc;
+            return make_var_pack(result);
+        }
+        loc = db_object_location(loc);
+    }
+    result.v.obj = NOTHING;
+    return make_var_pack(result);
+}
+
+static package
+bf_is_in(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_INT;
+    r.v.num = is_in(arglist.v.list[1].v.obj, arglist.v.list[2].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_is_in_a(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_INT;
+    r.v.num = is_in_a(arglist.v.list[1].v.obj, arglist.v.list[2].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_first_child(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_OBJ;
+    r.v.obj = db_first_child(arglist.v.list[1].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_last_child(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_OBJ;
+    r.v.obj = db_last_child(arglist.v.list[1].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_first_in(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_OBJ;
+    r.v.obj = db_first_contents(arglist.v.list[1].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
+static package
+bf_last_in(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    Var r;
+    r.type = TYPE_OBJ;
+    r.v.obj = db_last_contents(arglist.v.list[1].v.obj);
+    free_var(arglist);
+    return make_var_pack(r);
+}
+
 static int
 move_to_nothing(Objid oid)
 {
@@ -1379,6 +1537,16 @@ register_objects(void)
                                       bf_move_read, bf_move_write,
                                       TYPE_OBJ, TYPE_OBJ, TYPE_INT);
     register_function("isa", 2, 3, bf_isa, TYPE_ANY, TYPE_ANY, TYPE_INT);
+	register_function("is_a", 2, 3, bf_isa, TYPE_ANY, TYPE_ANY, TYPE_INT);
+	register_function("gamevalid", 1, 1, bf_gamevalid, TYPE_OBJ);
+    register_function("area", 1, 1, bf_area, TYPE_OBJ);
+    register_function("region", 1, 1, bf_region, TYPE_OBJ);
+    register_function("is_in", 2, 2, bf_is_in, TYPE_OBJ, TYPE_OBJ);
+    register_function("is_in_a", 2, 2, bf_is_in_a, TYPE_OBJ, TYPE_OBJ);
+    register_function("first_child", 1, 1, bf_first_child, TYPE_OBJ);
+    register_function("last_child", 1, 1, bf_last_child, TYPE_OBJ);
+    register_function("first_in", 1, 1, bf_first_in, TYPE_OBJ);
+    register_function("last_in", 1, 1, bf_last_in, TYPE_OBJ);
     register_function("locate_by_name", 1, 2, bf_locate_by_name, TYPE_STR, TYPE_INT);
     register_function("occupants", 1, 4, bf_occupants, TYPE_LIST, TYPE_ANY, TYPE_INT, TYPE_INT);
     register_function("locations", 1, 3, bf_locations, TYPE_OBJ, TYPE_OBJ, TYPE_INT);
