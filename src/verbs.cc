@@ -736,174 +736,262 @@ valid_lights_list(Var v)
     return true;
 }
 
-static bool
-valid_decos_list(Var v)
+static Var
+std_color_to_rgb_native(int c, int bold)
 {
-    if (v.type != TYPE_LIST)
-        return false;
-    int n = listlength(v);
-    for (int i = 1; i <= n; i++) {
-        if (v.v.list[i].type != TYPE_INT)
-            return false;
+    static const int std_palette[8][3] = {
+        {0,0,0}, {170,0,0}, {0,170,0}, {170,85,0},
+        {0,0,170}, {170,0,170}, {0,170,170}, {170,170,170}
+    };
+    static const int bold_palette[8][3] = {
+        {85,85,85}, {255,0,0}, {0,255,0}, {255,255,0},
+        {0,0,255}, {255,0,255}, {0,255,255}, {255,255,255}
+    };
+    Var result = new_list(3);
+    result.v.list[1].type = result.v.list[2].type = result.v.list[3].type = TYPE_INT;
+    if (c >= 0 && c < 8) {
+        const int *rgb = bold ? bold_palette[c] : std_palette[c];
+        result.v.list[1].v.num = rgb[0];
+        result.v.list[2].v.num = rgb[1];
+        result.v.list[3].v.num = rgb[2];
+    } else {
+        result.v.list[1].v.num = 170;
+        result.v.list[2].v.num = 170;
+        result.v.list[3].v.num = 170;
     }
-    return true;
-}
-
-static bool
-valid_chunk(Var v)
-{
-    return v.type == TYPE_LIST && listlength(v) == 4
-        && valid_rgb_list(v.v.list[1])
-        && valid_rgb_list(v.v.list[2])
-        && valid_decos_list(v.v.list[3])
-        && v.v.list[4].type == TYPE_STR;
-}
-
-static bool
-valid_chunks_list(Var v)
-{
-    if (v.type != TYPE_LIST)
-        return false;
-    int n = listlength(v);
-    for (int i = 1; i <= n; i++) {
-        if (!valid_chunk(v.v.list[i]))
-            return false;
-    }
-    return true;
+    return result;
 }
 
 static Var
-apply_lighting_native(Var base, Var ambient, Var lights, int realistic)
+xterm_to_rgb_native(int c)
 {
-    int base_r = base.v.list[1].v.num;
-    int base_g = base.v.list[2].v.num;
-    int base_b = base.v.list[3].v.num;
-    int amb_r = ambient.v.list[1].v.num;
-    int amb_g = ambient.v.list[2].v.num;
-    int amb_b = ambient.v.list[3].v.num;
+    if (c < 16) {
+        if (c < 8)
+            return std_color_to_rgb_native(c, 0);
+        else
+            return std_color_to_rgb_native(c - 8, 1);
+    } else if (c < 232) {
+        int cc = c - 16;
+        int b_idx = cc % 6;
+        cc = cc / 6;
+        int g_idx = cc % 6;
+        int r_idx = cc / 6;
+        static const int steps[6] = {0, 95, 135, 175, 215, 255};
+        Var result = new_list(3);
+        result.v.list[1].type = result.v.list[2].type = result.v.list[3].type = TYPE_INT;
+        result.v.list[1].v.num = steps[r_idx];
+        result.v.list[2].v.num = steps[g_idx];
+        result.v.list[3].v.num = steps[b_idx];
+        return result;
+    } else {
+        int val = (c - 232) * 10 + 8;
+        Var result = new_list(3);
+        result.v.list[1].type = result.v.list[2].type = result.v.list[3].type = TYPE_INT;
+        result.v.list[1].v.num = result.v.list[2].v.num = result.v.list[3].v.num = val;
+        return result;
+    }
+}
 
-    Var result = new_list(3);
-    result.v.list[1].type = TYPE_INT;
-    result.v.list[2].type = TYPE_INT;
-    result.v.list[3].type = TYPE_INT;
+struct NativeLight { double r, g, b, intensity; };
 
-    int nlights = listlength(lights);
-
+static void
+apply_lighting_scalar(const int base[3], const int amb[3], const std::vector<NativeLight> &lights, int realistic, int out[3])
+{
     if (!realistic) {
-        int r = base_r * amb_r / 255;
-        int g = base_g * amb_g / 255;
-        int b = base_b * amb_b / 255;
-
-        for (int i = 1; i <= nlights; i++) {
-            Var light = lights.v.list[i];
-            double intensity = (light.v.list[4].type == TYPE_FLOAT) ? light.v.list[4].v.fnum : (double) light.v.list[4].v.num;
-            if (intensity > 0.0) {
-                double lr = (light.v.list[1].type == TYPE_FLOAT) ? light.v.list[1].v.fnum : (double) light.v.list[1].v.num;
-                double lg = (light.v.list[2].type == TYPE_FLOAT) ? light.v.list[2].v.fnum : (double) light.v.list[2].v.num;
-                double lb = (light.v.list[3].type == TYPE_FLOAT) ? light.v.list[3].v.fnum : (double) light.v.list[3].v.num;
-                r += (int) (lr * intensity);
-                g += (int) (lg * intensity);
-                b += (int) (lb * intensity);
+        int r = base[0] * amb[0] / 255;
+        int g = base[1] * amb[1] / 255;
+        int b = base[2] * amb[2] / 255;
+        for (const auto &l : lights) {
+            if (l.intensity > 0.0) {
+                r += (int) (l.r * l.intensity);
+                g += (int) (l.g * l.intensity);
+                b += (int) (l.b * l.intensity);
             }
         }
-
-        result.v.list[1].v.num = r < 0 ? 0 : (r > 255 ? 255 : r);
-        result.v.list[2].v.num = g < 0 ? 0 : (g > 255 ? 255 : g);
-        result.v.list[3].v.num = b < 0 ? 0 : (b > 255 ? 255 : b);
+        out[0] = r < 0 ? 0 : (r > 255 ? 255 : r);
+        out[1] = g < 0 ? 0 : (g > 255 ? 255 : g);
+        out[2] = b < 0 ? 0 : (b > 255 ? 255 : b);
     } else {
-        int total_r = amb_r;
-        int total_g = amb_g;
-        int total_b = amb_b;
-
-        for (int i = 1; i <= nlights; i++) {
-            Var light = lights.v.list[i];
-            double intensity = (light.v.list[4].type == TYPE_FLOAT) ? light.v.list[4].v.fnum : (double) light.v.list[4].v.num;
-            double lr = (light.v.list[1].type == TYPE_FLOAT) ? light.v.list[1].v.fnum : (double) light.v.list[1].v.num;
-            double lg = (light.v.list[2].type == TYPE_FLOAT) ? light.v.list[2].v.fnum : (double) light.v.list[2].v.num;
-            double lb = (light.v.list[3].type == TYPE_FLOAT) ? light.v.list[3].v.fnum : (double) light.v.list[3].v.num;
-            total_r += (int) (lr * intensity);
-            total_g += (int) (lg * intensity);
-            total_b += (int) (lb * intensity);
+        int total_r = amb[0], total_g = amb[1], total_b = amb[2];
+        for (const auto &l : lights) {
+            total_r += (int) (l.r * l.intensity);
+            total_g += (int) (l.g * l.intensity);
+            total_b += (int) (l.b * l.intensity);
         }
-
-        result.v.list[1].v.num = base_r * total_r / 255;
-        result.v.list[2].v.num = base_g * total_g / 255;
-        result.v.list[3].v.num = base_b * total_b / 255;
+        out[0] = base[0] * total_r / 255;
+        out[1] = base[1] * total_g / 255;
+        out[2] = base[2] * total_b / 255;
     }
-
-    return result;
 }
 
 static package
 bf_tint_string(Var arglist, Byte next, void *vdata, Objid progr)
 {
-    Var chunks = arglist.v.list[1];
-    Var ambient = arglist.v.list[2];
-    Var lights = arglist.v.list[3];
-    int realistic = (arglist.v.list[0].v.num >= 4) ? arglist.v.list[4].v.num : 0;
-
-    if (!valid_chunks_list(chunks) || !valid_rgb_list(ambient) || !valid_lights_list(lights)) {
+    if (arglist.v.list[1].type != TYPE_STR || !valid_rgb_list(arglist.v.list[2]) || !valid_lights_list(arglist.v.list[3])) {
         free_var(arglist);
         return make_error_pack(E_INVARG);
     }
 
+    std::string str(arglist.v.list[1].v.str);
+    Var ambient_v = arglist.v.list[2];
+    Var lights_v = arglist.v.list[3];
+    int realistic = (arglist.v.list[0].v.num >= 4) ? arglist.v.list[4].v.num : 0;
+
+    int amb[3] = { ambient_v.v.list[1].v.num, ambient_v.v.list[2].v.num, ambient_v.v.list[3].v.num };
+
+    std::vector<NativeLight> lights;
+    int nlights = listlength(lights_v);
+    for (int i = 1; i <= nlights; i++) {
+        Var l = lights_v.v.list[i];
+        auto num = [](Var v) { return v.type == TYPE_FLOAT ? v.v.fnum : (double) v.v.num; };
+        lights.push_back({ num(l.v.list[1]), num(l.v.list[2]), num(l.v.list[3]), num(l.v.list[4]) });
+    }
+
+    int cur_fg[3] = {170, 170, 170};
+    int cur_bg[3] = {0, 0, 0};
+    int cur_bold = 0;
+    int cur_fg_idx = 7;
+    std::vector<int> cur_decos;
+
     std::string out;
-    int nchunks = listlength(chunks);
+    size_t pos = 0;
+    size_t len = str.length();
 
-    for (int i = 1; i <= nchunks; i++) {
-        Var chunk = chunks.v.list[i];
-        Var fg = chunk.v.list[1];
-        Var bg = chunk.v.list[2];
-        Var decos = chunk.v.list[3];
-        const char *text = chunk.v.list[4].v.str;
+    auto emit_chunk = [&](const std::string &chunk) {
+        int render_fg[3] = {cur_fg[0], cur_fg[1], cur_fg[2]};
+        int render_bg[3] = {cur_bg[0], cur_bg[1], cur_bg[2]};
+        std::vector<int> render_decos = cur_decos;
 
-        std::vector<int> deco_list;
-        bool reverse = false;
-        int ndecos = listlength(decos);
-        for (int d = 1; d <= ndecos; d++) {
-            int val = decos.v.list[d].v.num;
-            if (val == 7)
-                reverse = true;
-            else
-                deco_list.push_back(val);
-        }
-        Var real_fg = reverse ? bg : fg;
-        Var real_bg = reverse ? fg : bg;
+        auto it = std::find(render_decos.begin(), render_decos.end(), 7);
+        bool reverse = (it != render_decos.end());
+        if (reverse)
+            render_decos.erase(it);
 
-        Var new_fg = apply_lighting_native(real_fg, ambient, lights, realistic);
+        const int *use_fg = reverse ? render_bg : render_fg;
+        const int *use_bg = reverse ? render_fg : render_bg;
 
-        bool bg_is_black = (real_bg.v.list[1].v.num == 0 && real_bg.v.list[2].v.num == 0 && real_bg.v.list[3].v.num == 0);
-        Var new_bg;
-        if (bg_is_black) {
-            new_bg = new_list(3);
-            new_bg.v.list[1].type = new_bg.v.list[2].type = new_bg.v.list[3].type = TYPE_INT;
-            new_bg.v.list[1].v.num = new_bg.v.list[2].v.num = new_bg.v.list[3].v.num = 0;
+        int new_fg[3], new_bg[3];
+        apply_lighting_scalar(use_fg, amb, lights, realistic, new_fg);
+
+        bool bg_black = (use_bg[0] == 0 && use_bg[1] == 0 && use_bg[2] == 0);
+        if (bg_black) {
+            new_bg[0] = new_bg[1] = new_bg[2] = 0;
         } else {
-            new_bg = apply_lighting_native(real_bg, ambient, lights, realistic);
+            apply_lighting_scalar(use_bg, amb, lights, realistic, new_bg);
         }
 
         out += "\x1b[0;";
-        for (int d : deco_list) {
-            out += std::to_string(d);
-            out += ";";
-        }
-        out += "38;2;";
-        out += std::to_string(new_fg.v.list[1].v.num); out += ";";
-        out += std::to_string(new_fg.v.list[2].v.num); out += ";";
-        out += std::to_string(new_fg.v.list[3].v.num);
-
-        bool new_bg_is_black = (new_bg.v.list[1].v.num == 0 && new_bg.v.list[2].v.num == 0 && new_bg.v.list[3].v.num == 0);
-        if (!new_bg_is_black) {
-            out += ";48;2;";
-            out += std::to_string(new_bg.v.list[1].v.num); out += ";";
-            out += std::to_string(new_bg.v.list[2].v.num); out += ";";
-            out += std::to_string(new_bg.v.list[3].v.num);
+        for (int d : render_decos) { out += std::to_string(d); out += ";"; }
+        out += "38;2;" + std::to_string(new_fg[0]) + ";" + std::to_string(new_fg[1]) + ";" + std::to_string(new_fg[2]);
+        bool new_bg_black = (new_bg[0] == 0 && new_bg[1] == 0 && new_bg[2] == 0);
+        if (!new_bg_black) {
+            out += ";48;2;" + std::to_string(new_bg[0]) + ";" + std::to_string(new_bg[1]) + ";" + std::to_string(new_bg[2]);
         }
         out += "m";
-        out += text;
+        out += chunk;
+    };
 
-        free_var(new_fg);
-        free_var(new_bg);
+    while (pos < len) {
+        size_t esc_loc = str.find((char)27, pos);
+        if (esc_loc != pos) {
+            std::string chunk;
+            if (esc_loc == std::string::npos) {
+                chunk = str.substr(pos);
+                pos = len;
+            } else {
+                chunk = str.substr(pos, esc_loc - pos);
+                pos = esc_loc;
+            }
+            emit_chunk(chunk);
+            if (pos >= len)
+                break;
+        }
+
+        size_t m_loc = str.find('m', pos);
+        if (m_loc != std::string::npos) {
+            size_t seq_start = pos + 1;
+            std::string code_seq = str.substr(seq_start, m_loc - seq_start);
+            if (!code_seq.empty() && code_seq[0] == '[')
+                code_seq = code_seq.substr(1);
+
+            std::vector<std::string> parts;
+            size_t start = 0;
+            while (true) {
+                size_t semi = code_seq.find(';', start);
+                if (semi == std::string::npos) {
+                    parts.push_back(code_seq.substr(start));
+                    break;
+                }
+                parts.push_back(code_seq.substr(start, semi - start));
+                start = semi + 1;
+            }
+
+            size_t i = 0;
+            while (i < parts.size()) {
+                int val = parts[i].empty() ? 0 : atoi(parts[i].c_str());
+                if (val == 0) {
+                    cur_bold = 0;
+                    cur_fg_idx = 7;
+                    Var c = std_color_to_rgb_native(7, 0);
+                    cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                    cur_bg[0] = cur_bg[1] = cur_bg[2] = 0;
+                    cur_decos.clear();
+                } else if (val == 1) {
+                    cur_bold = 1;
+                    if (cur_fg_idx != -1) {
+                        Var c = std_color_to_rgb_native(cur_fg_idx, 1);
+                        cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                    }
+                } else if (val == 3 || val == 4 || val == 7 || val == 9) {
+                    if (std::find(cur_decos.begin(), cur_decos.end(), val) == cur_decos.end())
+                        cur_decos.push_back(val);
+                } else if (val == 23 || val == 24 || val == 27 || val == 29) {
+                    int target = val - 20;
+                    cur_decos.erase(std::remove(cur_decos.begin(), cur_decos.end(), target), cur_decos.end());
+                } else if (val >= 30 && val <= 37) {
+                    cur_fg_idx = val - 30;
+                    Var c = std_color_to_rgb_native(cur_fg_idx, cur_bold);
+                    cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                } else if (val >= 40 && val <= 47) {
+                    Var c = std_color_to_rgb_native(val - 40, 0);
+                    cur_bg[0] = c.v.list[1].v.num; cur_bg[1] = c.v.list[2].v.num; cur_bg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                } else if (val == 38) {
+                    if (i + 4 < parts.size() && parts[i+1] == "2") {
+                        cur_fg[0] = atoi(parts[i+2].c_str());
+                        cur_fg[1] = atoi(parts[i+3].c_str());
+                        cur_fg[2] = atoi(parts[i+4].c_str());
+                        cur_fg_idx = -1;
+                        i += 4;
+                    } else if (i + 2 < parts.size() && parts[i+1] == "5") {
+                        Var c = xterm_to_rgb_native(atoi(parts[i+2].c_str()));
+                        cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                        cur_fg_idx = -1;
+                        i += 2;
+                    }
+                } else if (val == 48) {
+                    if (i + 4 < parts.size() && parts[i+1] == "2") {
+                        cur_bg[0] = atoi(parts[i+2].c_str());
+                        cur_bg[1] = atoi(parts[i+3].c_str());
+                        cur_bg[2] = atoi(parts[i+4].c_str());
+                        i += 4;
+                    } else if (i + 2 < parts.size() && parts[i+1] == "5") {
+                        Var c = xterm_to_rgb_native(atoi(parts[i+2].c_str()));
+                        cur_bg[0] = c.v.list[1].v.num; cur_bg[1] = c.v.list[2].v.num; cur_bg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                        i += 2;
+                    }
+                }
+                i++;
+            }
+            pos = m_loc + 1;
+        } else {
+            pos += 1;
+        }
     }
 
     out += "\x1b[0m";
@@ -941,5 +1029,5 @@ register_verbs(void)
     register_function("eval", 1, -1, bf_eval, TYPE_STR);
 	register_function("call_verb", 3, 4, bf_call_verb,
                   TYPE_OBJ, TYPE_STR, TYPE_LIST, TYPE_OBJ);
-    register_function("tint_string", 3, 4, bf_tint_string, TYPE_LIST, TYPE_LIST, TYPE_LIST, TYPE_INT);
+    register_function("tint_string", 3, 4, bf_tint_string, TYPE_STR, TYPE_LIST, TYPE_LIST, TYPE_INT);
 }
