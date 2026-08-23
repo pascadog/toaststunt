@@ -64,6 +64,7 @@ static void     resume_loop_scope(void);
 enum loop_exit_kind { LOOP_BREAK, LOOP_CONTINUE };
 
 static void     check_loop_name(const char *, enum loop_exit_kind);
+static void     vet_compound_lvalue(Expr *);
 %}
 
 %union {
@@ -99,8 +100,9 @@ static void     check_loop_name(const char *, enum loop_exit_kind);
 %token  tWHILE tENDWHILE tTRY tENDTRY tEXCEPT tFINALLY tANY tBREAK tCONTINUE
 
 %token  tTO tARROW tMAP
+%token  tPLUSEQ tMINUSEQ tTIMESEQ tDIVEQ tMODEQ
 
-%right  '='
+%right  '=' tPLUSEQ tMINUSEQ tTIMESEQ tDIVEQ tMODEQ
 %nonassoc '?' '|'
 %left   tOR tAND
 %left   tEQ tNE '<' tLE '>' tGE tIN
@@ -492,6 +494,31 @@ expr:
 		    e->e.scatter = $2;
 		    vet_scatter($2);
 		    $$ = alloc_binary(EXPR_ASGN, e, $5);
+		}
+	| expr tPLUSEQ expr
+		{
+		    vet_compound_lvalue($1);
+		    $$ = alloc_binary(EXPR_ASGN_PLUS, $1, $3);
+		}
+	| expr tMINUSEQ expr
+		{
+		    vet_compound_lvalue($1);
+		    $$ = alloc_binary(EXPR_ASGN_MINUS, $1, $3);
+		}
+	| expr tTIMESEQ expr
+		{
+		    vet_compound_lvalue($1);
+		    $$ = alloc_binary(EXPR_ASGN_TIMES, $1, $3);
+		}
+	| expr tDIVEQ expr
+		{
+		    vet_compound_lvalue($1);
+		    $$ = alloc_binary(EXPR_ASGN_DIVIDE, $1, $3);
+		}
+	| expr tMODEQ expr
+		{
+		    vet_compound_lvalue($1);
+		    $$ = alloc_binary(EXPR_ASGN_MOD, $1, $3);
 		}
 	| tID '(' arglist ')'
 		{
@@ -901,6 +928,8 @@ start_over:
 		    return c;
 		}
 	    }
+	} else if (c == '=') {
+	    return tDIVEQ;
 	} else {
 	    lex_ungetc(c);
 	    return '/';
@@ -1059,7 +1088,11 @@ start_over:
 			     : follow('|', tOR, '|');
       case '&':         return follow('.', 1, 0) ? tBITAND
 			     : follow('&', tAND, '&');
-      case '-':         return follow('>', tMAP, '-');
+      case '+':         return follow('=', tPLUSEQ, '+');
+      case '-':         return follow('=', 1, 0) ? tMINUSEQ
+			     : follow('>', tMAP, '-');
+      case '*':         return follow('=', tTIMESEQ, '*');
+      case '%':         return follow('=', tMODEQ, '%');
       case '!':         return follow('=', tNE, '!');
       normal_dot:
       case '.':         return follow('.', tTO, '.');
@@ -1100,6 +1133,17 @@ scatter_from_arglist(Arg_List *a)
     }
 
     return sc;
+}
+
+static void
+vet_compound_lvalue(Expr *e)
+{
+    /* Compound assignment (+=, -=, *=, /=, %=) only makes sense against a
+     * simple variable, a property, or an indexed element -- not a range or
+     * a scattering assignment target.
+     */
+    if (e->kind != EXPR_ID && e->kind != EXPR_PROP && e->kind != EXPR_INDEX)
+	yyerror("Illegal expression on left side of compound assignment.");
 }
 
 static void

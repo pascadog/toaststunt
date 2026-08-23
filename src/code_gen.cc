@@ -836,10 +836,36 @@ generate_expr(Expr * expr, State * state)
         }
         break;
         case EXPR_ASGN:
+        case EXPR_ASGN_PLUS:
+        case EXPR_ASGN_MINUS:
+        case EXPR_ASGN_TIMES:
+        case EXPR_ASGN_DIVIDE:
+        case EXPR_ASGN_MOD:
         {
             Expr *e = expr->e.bin.lhs;
+            int compound_op = -1;
 
-            if (e->kind == EXPR_SCATTER) {
+            switch (expr->kind) {
+                case EXPR_ASGN_PLUS:
+                    compound_op = OP_ADD;
+                    break;
+                case EXPR_ASGN_MINUS:
+                    compound_op = OP_MINUS;
+                    break;
+                case EXPR_ASGN_TIMES:
+                    compound_op = OP_MULT;
+                    break;
+                case EXPR_ASGN_DIVIDE:
+                    compound_op = OP_DIV;
+                    break;
+                case EXPR_ASGN_MOD:
+                    compound_op = OP_MOD;
+                    break;
+                default:
+                    break; /* plain EXPR_ASGN: compound_op stays -1 */
+            }
+
+            if (compound_op < 0 && e->kind == EXPR_SCATTER) {
                 int nargs = 0, nreq = 0, rest = -1;
                 unsigned done;
                 Scatter *sc;
@@ -880,8 +906,12 @@ generate_expr(Expr * expr, State * state)
             } else {
                 int is_indexed = 0;
 
-                push_lvalue(e, 0, state);
+                push_lvalue(e, compound_op >= 0 ? 1 : 0, state);
                 generate_expr(expr->e.bin.rhs, state);
+                if (compound_op >= 0) {
+                    emit_byte((Opcode) compound_op, state);
+                    pop_stack(1, state);
+                }
                 if (e->kind == EXPR_RANGE || e->kind == EXPR_INDEX)
                     emit_byte(OP_PUT_TEMP, state);
                 while (1) {

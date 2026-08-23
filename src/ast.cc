@@ -294,6 +294,11 @@ free_expr(Expr * expr)
         case EXPR_GE:
         case EXPR_IN:
         case EXPR_ASGN:
+        case EXPR_ASGN_PLUS:
+        case EXPR_ASGN_MINUS:
+        case EXPR_ASGN_TIMES:
+        case EXPR_ASGN_DIVIDE:
+        case EXPR_ASGN_MOD:
         case EXPR_EXP:
         case EXPR_BITOR:
         case EXPR_BITAND:
