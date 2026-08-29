@@ -741,8 +741,8 @@ static Var
 std_color_to_rgb_native(int c, int bold)
 {
     static const int std_palette[8][3] = {
-        {0,0,0}, {170,0,0}, {0,170,0}, {170,85,0},
-        {0,0,170}, {170,0,170}, {0,170,170}, {170,170,170}
+        {0,0,0}, {128,0,0}, {0,128,0}, {128,128,0},
+        {0,0,128}, {128,0,128}, {0,128,128}, {128,128,128}
     };
     static const int bold_palette[8][3] = {
         {85,85,85}, {255,0,0}, {0,255,0}, {255,255,0},
@@ -1004,6 +1004,188 @@ bf_tint_string(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(result);
 }
 
+static void
+apply_saturation_scalar(const int base[3], double amount, int out[3])
+{
+    double r = base[0], g = base[1], b = base[2];
+    double lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    double out_r = lum + (r - lum) * amount;
+    double out_g = lum + (g - lum) * amount;
+    double out_b = lum + (b - lum) * amount;
+    out[0] = (int) (out_r < 0.0 ? 0.0 : (out_r > 255.0 ? 255.0 : out_r));
+    out[1] = (int) (out_g < 0.0 ? 0.0 : (out_g > 255.0 ? 255.0 : out_g));
+    out[2] = (int) (out_b < 0.0 ? 0.0 : (out_b > 255.0 ? 255.0 : out_b));
+}
+
+static package
+bf_desaturate_string(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    if (arglist.v.list[1].type != TYPE_STR) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    }
+
+    std::string str(arglist.v.list[1].v.str);
+    Var amount_v = arglist.v.list[2];
+    double amount = amount_v.type == TYPE_FLOAT ? amount_v.v.fnum : (double) amount_v.v.num;
+
+    int cur_fg[3] = {170, 170, 170};
+    int cur_bg[3] = {0, 0, 0};
+    int cur_bold = 0;
+    int cur_fg_idx = 7;
+    std::vector<int> cur_decos;
+
+    std::string out;
+    size_t pos = 0;
+    size_t len = str.length();
+
+    auto emit_chunk = [&](const std::string &chunk) {
+        int render_fg[3] = {cur_fg[0], cur_fg[1], cur_fg[2]};
+        int render_bg[3] = {cur_bg[0], cur_bg[1], cur_bg[2]};
+        std::vector<int> render_decos = cur_decos;
+
+        auto it = std::find(render_decos.begin(), render_decos.end(), 7);
+        bool reverse = (it != render_decos.end());
+        if (reverse)
+            render_decos.erase(it);
+
+        const int *use_fg = reverse ? render_bg : render_fg;
+        const int *use_bg = reverse ? render_fg : render_bg;
+
+        int new_fg[3], new_bg[3];
+        apply_saturation_scalar(use_fg, amount, new_fg);
+
+        bool bg_black = (use_bg[0] == 0 && use_bg[1] == 0 && use_bg[2] == 0);
+        if (bg_black) {
+            new_bg[0] = new_bg[1] = new_bg[2] = 0;
+        } else {
+            apply_saturation_scalar(use_bg, amount, new_bg);
+        }
+
+        out += "\x1b[0;";
+        for (int d : render_decos) { out += std::to_string(d); out += ";"; }
+        out += "38;2;" + std::to_string(new_fg[0]) + ";" + std::to_string(new_fg[1]) + ";" + std::to_string(new_fg[2]);
+        bool new_bg_black = (new_bg[0] == 0 && new_bg[1] == 0 && new_bg[2] == 0);
+        if (!new_bg_black) {
+            out += ";48;2;" + std::to_string(new_bg[0]) + ";" + std::to_string(new_bg[1]) + ";" + std::to_string(new_bg[2]);
+        }
+        out += "m";
+        out += chunk;
+    };
+
+    while (pos < len) {
+        size_t esc_loc = str.find((char)27, pos);
+        if (esc_loc != pos) {
+            std::string chunk;
+            if (esc_loc == std::string::npos) {
+                chunk = str.substr(pos);
+                pos = len;
+            } else {
+                chunk = str.substr(pos, esc_loc - pos);
+                pos = esc_loc;
+            }
+            emit_chunk(chunk);
+            if (pos >= len)
+                break;
+        }
+
+        size_t m_loc = str.find('m', pos);
+        if (m_loc != std::string::npos) {
+            size_t seq_start = pos + 1;
+            std::string code_seq = str.substr(seq_start, m_loc - seq_start);
+            if (!code_seq.empty() && code_seq[0] == '[')
+                code_seq = code_seq.substr(1);
+
+            std::vector<std::string> parts;
+            size_t start = 0;
+            while (true) {
+                size_t semi = code_seq.find(';', start);
+                if (semi == std::string::npos) {
+                    parts.push_back(code_seq.substr(start));
+                    break;
+                }
+                parts.push_back(code_seq.substr(start, semi - start));
+                start = semi + 1;
+            }
+
+            size_t i = 0;
+            while (i < parts.size()) {
+                int val = parts[i].empty() ? 0 : atoi(parts[i].c_str());
+                if (val == 0) {
+                    cur_bold = 0;
+                    cur_fg_idx = 7;
+                    Var c = std_color_to_rgb_native(7, 0);
+                    cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                    cur_bg[0] = cur_bg[1] = cur_bg[2] = 0;
+                    cur_decos.clear();
+                } else if (val == 1) {
+                    cur_bold = 1;
+                    if (cur_fg_idx != -1) {
+                        Var c = std_color_to_rgb_native(cur_fg_idx, 1);
+                        cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                    }
+                } else if (val == 3 || val == 4 || val == 7 || val == 9) {
+                    if (std::find(cur_decos.begin(), cur_decos.end(), val) == cur_decos.end())
+                        cur_decos.push_back(val);
+                } else if (val == 23 || val == 24 || val == 27 || val == 29) {
+                    int target = val - 20;
+                    cur_decos.erase(std::remove(cur_decos.begin(), cur_decos.end(), target), cur_decos.end());
+                } else if (val >= 30 && val <= 37) {
+                    cur_fg_idx = val - 30;
+                    Var c = std_color_to_rgb_native(cur_fg_idx, cur_bold);
+                    cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                } else if (val >= 40 && val <= 47) {
+                    Var c = std_color_to_rgb_native(val - 40, 0);
+                    cur_bg[0] = c.v.list[1].v.num; cur_bg[1] = c.v.list[2].v.num; cur_bg[2] = c.v.list[3].v.num;
+                    free_var(c);
+                } else if (val == 38) {
+                    if (i + 4 < parts.size() && parts[i+1] == "2") {
+                        cur_fg[0] = atoi(parts[i+2].c_str());
+                        cur_fg[1] = atoi(parts[i+3].c_str());
+                        cur_fg[2] = atoi(parts[i+4].c_str());
+                        cur_fg_idx = -1;
+                        i += 4;
+                    } else if (i + 2 < parts.size() && parts[i+1] == "5") {
+                        Var c = xterm_to_rgb_native(atoi(parts[i+2].c_str()));
+                        cur_fg[0] = c.v.list[1].v.num; cur_fg[1] = c.v.list[2].v.num; cur_fg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                        cur_fg_idx = -1;
+                        i += 2;
+                    }
+                } else if (val == 48) {
+                    if (i + 4 < parts.size() && parts[i+1] == "2") {
+                        cur_bg[0] = atoi(parts[i+2].c_str());
+                        cur_bg[1] = atoi(parts[i+3].c_str());
+                        cur_bg[2] = atoi(parts[i+4].c_str());
+                        i += 4;
+                    } else if (i + 2 < parts.size() && parts[i+1] == "5") {
+                        Var c = xterm_to_rgb_native(atoi(parts[i+2].c_str()));
+                        cur_bg[0] = c.v.list[1].v.num; cur_bg[1] = c.v.list[2].v.num; cur_bg[2] = c.v.list[3].v.num;
+                        free_var(c);
+                        i += 2;
+                    }
+                }
+                i++;
+            }
+            pos = m_loc + 1;
+        } else {
+            pos += 1;
+        }
+    }
+
+    out += "\x1b[0m";
+    free_var(arglist);
+
+    Var result;
+    result.type = TYPE_STR;
+    result.v.str = str_dup(out.c_str());
+    return make_var_pack(result);
+}
+
+
 void
 register_verbs(void)
 {
@@ -1031,4 +1213,5 @@ register_verbs(void)
 	register_function("call_verb", 3, 4, bf_call_verb,
                   TYPE_OBJ, TYPE_STR, TYPE_LIST, TYPE_OBJ);
     register_function("tint_string", 3, 4, bf_tint_string, TYPE_STR, TYPE_LIST, TYPE_LIST, TYPE_INT);
+	register_function("desaturate_string", 2, 2, bf_desaturate_string, TYPE_STR, TYPE_NUMERIC);
 }
