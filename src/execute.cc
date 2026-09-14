@@ -18,6 +18,8 @@
 #include <chrono>
 #include <string.h>
 #include <stdarg.h>
+#include <string>
+#include <unordered_map>
 
 #include "collection.h"
 #include "config.h"
@@ -101,6 +103,71 @@ static Var type_mismatch_value(int n_args, ...);
 /* macros to ease indexing into activation stack */
 #define RUN_ACTIV     activ_stack[top_activ_stack]
 #define CALLER_ACTIV  activ_stack[top_activ_stack - 1]
+
+/**** verb profiling ****/
+
+struct prof_entry {
+    Objid definer;
+    std::string verbname;
+    Num calls;
+    Num ticks;
+};
+
+static bool profiling_on = false;
+static std::unordered_map<std::string, prof_entry> profile_table;
+static prof_entry *prof_cached_entry = nullptr;
+static Objid prof_cached_definer = NOTHING;
+static const char *prof_cached_verbname = nullptr;
+
+static void
+profile_invalidate_cache(void)
+{
+    prof_cached_entry = nullptr;
+    prof_cached_definer = NOTHING;
+    prof_cached_verbname = nullptr;
+}
+
+static prof_entry *
+profile_entry_for(Objid definer, const char *verbname)
+{
+    if (prof_cached_entry != nullptr
+            && definer == prof_cached_definer
+            && verbname == prof_cached_verbname)
+        return prof_cached_entry;
+
+    std::string key = std::to_string((Num) definer);
+    key += ':';
+    key += (verbname ? verbname : "");
+
+    auto it = profile_table.find(key);
+    if (it == profile_table.end()) {
+        prof_entry e;
+        e.definer = definer;
+        e.verbname = (verbname ? verbname : "");
+        e.calls = 0;
+        e.ticks = 0;
+        it = profile_table.emplace(key, e).first;
+    }
+
+    prof_cached_entry = &it->second;
+    prof_cached_definer = definer;
+    prof_cached_verbname = verbname;
+    return prof_cached_entry;
+}
+
+static void
+profile_charge(Num ticks, Num calls)
+{
+    if (activ_stack == nullptr)
+        return;
+
+    Objid definer = (RUN_ACTIV.vloc.type == TYPE_OBJ)
+                    ? RUN_ACTIV.vloc.v.obj : NOTHING;
+    prof_entry *e = profile_entry_for(definer, RUN_ACTIV.verbname);
+
+    e->ticks += ticks;
+    e->calls += calls;
+}
 
 /**** error handling ****/
 
@@ -779,6 +846,9 @@ call_verb2(Objid recv, const char *vname, Var _this, Var args, int do_pass, bool
     set_rt_env_var(env, SLOT_VERB, v);  /* no var_dup */
     set_rt_env_var(env, SLOT_ARGS, args);   /* no var_dup */
 
+    if (profiling_on)
+        profile_charge(0, 1);
+
     return E_NONE;
 }
 
@@ -975,6 +1045,8 @@ next_opcode:
         op = (Opcode)(*bv++);
 
         if (COUNT_TICK(op)) {
+            if (profiling_on)
+                profile_charge(1, 0);
             if (--ticks_remaining <= 0) {
                 STORE_STATE_VARIABLES();
                 abort_task(ABORT_TICKS);
@@ -2285,8 +2357,11 @@ else if (obj.type == TYPE_##t1) {           \
             {
                 enum Extended_Opcode eop = (Extended_Opcode)(*bv);
                 bv++;
-                if (COUNT_EOP_TICK(eop))
+                if (COUNT_EOP_TICK(eop)) {
+                    if (profiling_on)
+                        profile_charge(1, 0);
                     ticks_remaining--;
+                }
                 switch (eop) {
                     case EOP_RANGESET:
                     {
@@ -3768,6 +3843,61 @@ bf_task_stack(Var arglist, Byte next, void *vdata, Objid progr)
                                          progr));
 }
 
+static package
+bf_profile_start(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    free_var(arglist);
+
+    if (!is_wizard(progr))
+        return make_error_pack(E_PERM);
+
+    profile_table.clear();
+    profile_invalidate_cache();
+    profiling_on = true;
+
+    return no_var_pack();
+}
+
+static package
+bf_profile_stop(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    free_var(arglist);
+
+    if (!is_wizard(progr))
+        return make_error_pack(E_PERM);
+
+    profiling_on = false;
+    profile_invalidate_cache();
+
+    return no_var_pack();
+}
+
+static package
+bf_profile_data(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    free_var(arglist);
+
+    if (!is_wizard(progr))
+        return make_error_pack(E_PERM);
+
+    Var r = new_list(0);
+
+    for (auto &it : profile_table) {
+        Var row = new_list(4);
+        row.v.list[1].type = TYPE_OBJ;
+        row.v.list[1].v.obj = it.second.definer;
+        row.v.list[2].type = TYPE_STR;
+        row.v.list[2].v.str = str_dup(it.second.verbname.c_str());
+        row.v.list[3].type = TYPE_INT;
+        row.v.list[3].v.num = it.second.calls;
+        row.v.list[4].type = TYPE_INT;
+        row.v.list[4].v.num = it.second.ticks;
+        r = listappend(r, row);
+    }
+
+    return make_var_pack(r);
+}
+
 void
 register_execute(void)
 {
@@ -3789,6 +3919,10 @@ register_execute(void)
     register_function("caller_perms", 0, 0, bf_caller_perms);
     register_function("callers", 0, 1, bf_callers, TYPE_ANY);
     register_function("task_stack", 1, 3, bf_task_stack, TYPE_INT, TYPE_ANY, TYPE_ANY);
+
+    register_function("profile_start", 0, 0, bf_profile_start);
+    register_function("profile_stop", 0, 0, bf_profile_stop);
+    register_function("profile_data", 0, 0, bf_profile_data);
 
 #ifdef WAIF_DICT
     waif_index_verb = str_dup(WAIF_INDEX_VERB);
