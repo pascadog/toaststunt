@@ -1385,6 +1385,95 @@ bf_occupants(Var arglist, Byte next, void *vdata, Objid progr)
     return make_var_pack(ret);
 }
 
+/* Return the objects whose integer x, y and z properties all fall inside the
+ * inclusive box from min to max, in their original order. Objects that are
+ * invalid, lack one of the properties, hold a non-integer, or whose property
+ * the caller can't read are left out.
+ * objects_in_box(LIST objects, LIST min, LIST max)
+ */
+static package
+bf_objects_in_box(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    static const char *axes[3] = {"x", "y", "z"};
+    const Var objects = arglist.v.list[1];
+    const Var lo = arglist.v.list[2];
+    const Var hi = arglist.v.list[3];
+
+    if (listlength(lo) != 3 || listlength(hi) != 3) {
+        free_var(arglist);
+        return make_error_pack(E_INVARG);
+    }
+
+    Num min[3], max[3];
+    for (int k = 0; k < 3; k++) {
+        if (lo.v.list[k + 1].type != TYPE_INT || hi.v.list[k + 1].type != TYPE_INT) {
+            free_var(arglist);
+            return make_error_pack(E_TYPE);
+        }
+        min[k] = lo.v.list[k + 1].v.num;
+        max[k] = hi.v.list[k + 1].v.num;
+    }
+
+    std::vector<Objid> tmp;
+    const int count = listlength(objects);
+
+    for (int i = 1; i <= count; i++) {
+        const Var obj = objects.v.list[i];
+        if (obj.type != TYPE_OBJ || !valid(obj.v.obj))
+            continue;
+
+        bool inside = true;
+        for (int k = 0; k < 3 && inside; k++) {
+            Var value;
+            db_prop_handle h = db_find_property(obj, axes[k], &value);
+            inside = h.ptr && !db_is_property_built_in(h)
+                     && db_property_allows(h, progr, PF_READ)
+                     && value.type == TYPE_INT
+                     && value.v.num >= min[k] && value.v.num <= max[k];
+        }
+        if (inside)
+            tmp.push_back(obj.v.obj);
+    }
+
+    free_var(arglist);
+
+    Var ret = new_list(tmp.size());
+    for (size_t x = 0; x < tmp.size(); x++)
+        ret.v.list[x + 1] = Var::new_obj(tmp[x]);
+
+    return make_var_pack(ret);
+}
+
+/* Return the objects that have a callable verb called name, in their
+ * original order. The same check respond_to() makes, over a whole list.
+ * responders(LIST objects, STR name)
+ */
+static package
+bf_responders(Var arglist, Byte next, void *vdata, Objid progr)
+{
+    const Var objects = arglist.v.list[1];
+    const char *name = arglist.v.list[2].v.str;
+    std::vector<Objid> tmp;
+    const int count = listlength(objects);
+
+    for (int i = 1; i <= count; i++) {
+        const Var obj = objects.v.list[i];
+        if (obj.type != TYPE_OBJ || !valid(obj.v.obj))
+            continue;
+
+        if (db_find_callable_verb(obj, name).ptr)
+            tmp.push_back(obj.v.obj);
+    }
+
+    free_var(arglist);
+
+    Var ret = new_list(tmp.size());
+    for (size_t x = 0; x < tmp.size(); x++)
+        ret.v.list[x + 1] = Var::new_obj(tmp[x]);
+
+    return make_var_pack(ret);
+}
+
 /* Return a list of nested locations for an object.
  * If base_object is specified, locations will stop at that object. Otherwise,
  *   stop at $nothing (#-1).
@@ -1549,6 +1638,8 @@ register_objects(void)
     register_function("last_in", 1, 1, bf_last_in, TYPE_OBJ);
     register_function("locate_by_name", 1, 2, bf_locate_by_name, TYPE_STR, TYPE_INT);
     register_function("occupants", 1, 4, bf_occupants, TYPE_LIST, TYPE_ANY, TYPE_INT, TYPE_INT);
+    register_function("objects_in_box", 3, 3, bf_objects_in_box, TYPE_LIST, TYPE_LIST, TYPE_LIST);
+    register_function("responders", 2, 2, bf_responders, TYPE_LIST, TYPE_STR);
     register_function("locations", 1, 3, bf_locations, TYPE_OBJ, TYPE_OBJ, TYPE_INT);
     register_function("recycled_objects", 0, 0, bf_recycled_objects);
     register_function("next_recycled_object", 0, 1, bf_next_recycled_object, TYPE_OBJ);
