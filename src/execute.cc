@@ -1044,7 +1044,9 @@ next_opcode:
         error_bv = bv;
         op = (Opcode)(*bv++);
 
-        if (COUNT_TICK(op)) {
+        /* Extended opcodes must enforce the same limits as ordinary ones. */
+        if (COUNT_TICK(op)
+                || (op == OP_EXTENDED && COUNT_EOP_TICK(*bv))) {
             if (profiling_on)
                 profile_charge(1, 0);
             if (--ticks_remaining <= 0) {
@@ -1924,6 +1926,23 @@ finish_comparison:
             }
             break;
 
+#ifdef BYTECODE_REDUCE_REF
+            case OP_G_PUSH_CLEAR:
+            {
+                int var_pos = READ_BYTES(bv, bc.numbytes_var_name);
+                Var *vp = &RUN_ACTIV.rt_env[var_pos];
+                if (vp->type == TYPE_NONE) {
+                    Var not_found = str_ref_to_var(*(&RUN_ACTIV.prog->var_names[var_pos]));
+                    var_ref(nothing);
+                    PUSH_X_NOT_FOUND(E_VARNF, not_found, nothing);
+                } else {
+                    PUSH(*vp);
+                    vp->type = TYPE_NONE;
+                }
+            }
+            break;
+#endif              /* BYTECODE_REDUCE_REF */
+
             case OP_GET_PROP:
             {
                 Var propname, obj, prop;
@@ -1934,13 +1953,12 @@ finish_comparison:
                     enum error err;
 
                     err = waif_get_prop(obj.v.waif, propname.v.str, &prop, RUN_ACTIV.progr);
-                    free_var(obj);
                     if (err == E_PROPNF) {
-                        var_ref(propname);
-                        var_ref(obj);
+                        /* Takes over our references to propname and obj. */
                         PUSH_X_NOT_FOUND(E_PROPNF, propname, obj);
                     }
                     else {
+                        free_var(obj);
                         free_var(propname);
                         if (err == E_NONE)
                             PUSH(prop);
@@ -2039,16 +2057,17 @@ finish_comparison:
                     enum error err;
 
                     err = waif_put_prop(obj.v.waif, propname.v.str, rhs, RUN_ACTIV.progr);
-                    free_var(obj);
                     if (err == E_NONE) {
+                        free_var(obj);
                         free_var(propname);
                         PUSH(rhs);
                     } else {
                         free_var(rhs);
                         if (err == E_PROPNF) {
-                            var_ref(obj);
+                            /* Takes over our references to propname and obj. */
                             PUSH_X_NOT_FOUND(E_PROPNF, propname, obj);
                         } else {
+                            free_var(obj);
                             free_var(propname);
                             PUSH_ERROR(err);
                         }
@@ -2357,11 +2376,6 @@ else if (obj.type == TYPE_##t1) {           \
             {
                 enum Extended_Opcode eop = (Extended_Opcode)(*bv);
                 bv++;
-                if (COUNT_EOP_TICK(eop)) {
-                    if (profiling_on)
-                        profile_charge(1, 0);
-                    ticks_remaining--;
-                }
                 switch (eop) {
                     case EOP_RANGESET:
                     {
